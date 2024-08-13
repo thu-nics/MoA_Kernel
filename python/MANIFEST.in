@@ -1,0 +1,20 @@
+# sdist & wheel
+include version.txt
+include generate_batch_paged_decode_inst.py
+include generate_batch_paged_prefill_inst.py
+include generate_batch_ragged_prefill_inst.py
+include generate_dispatch_inc.py
+include generate_single_decode_inst.py
+include generate_single_prefill_inst.py
+include literal_map.py
+recursive-include include *
+recursive-include csrc *
+recursive-include 3rdparty/cutlass *
+
+# wheel-only
+exclude flashinfer/_build_meta.py
+exclude tests/
+
+# Unneeded files
+prune */__pycache__
+global-exclude *.so
