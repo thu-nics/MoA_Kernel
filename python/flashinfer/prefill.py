@@ -421,8 +421,18 @@ def moa_prefill(
 ):
     if sm_scale is None:
         sm_scale = 1.0 / math.sqrt(q.size(-1))
+
+    if len(q.shape) == 4:
+        assert(q.size(0) == 1)
+        q = q.squeeze(0)
+    if len(k.shape) == 4:
+        assert(k.size(0) == 1)
+        k = k.squeeze(0)
+    if len(v.shape) == 4:
+        assert(v.size(0) == 1)
+        v = v.squeeze(0)
         
-    return _prefill.moa_prefill(
+    o = _prefill.moa_prefill(
         q,
         k,
         v,
@@ -433,6 +443,8 @@ def moa_prefill(
         window_left,
         sm_scale,
     )
+
+    return o.unsqueeze(0)
 
 
 def _compute_page_qk_indptr(

@@ -14,6 +14,7 @@ args = parser.parse_args()
 device_id = args.device_id
 
 kv_len = args.kv_len
+qo_len = kv_len
 assert(kv_len > 64)
 num_kv_heads = args.num_kv_heads
 head_dim = 128
@@ -58,21 +59,22 @@ print("num band blocks for each head:")
 print(num_band_blocks)
 
 causal_mask = create_block_mask(num_global_blocks, num_band_blocks, 64, kv_len).to(device_id)
+
+q = torch.randn(1, qo_len, num_qo_heads, head_dim).half().to(device_id) # prefill attention
 k = torch.randn(1, kv_len, num_kv_heads, head_dim).half().to(device_id) 
 v = torch.randn(1, kv_len, num_kv_heads, head_dim).half().to(device_id) 
 
-# decode attention
-
+### moa kernel ###
 num_band_blocks = torch.tensor(num_band_blocks, dtype=torch.long).to(device_id)
-# prefill attention
-qo_len = kv_len
-q = torch.randn(1, qo_len, num_qo_heads, head_dim).half().to(device_id) # prefill attention
-o = flashinfer.moa_prefill(q, k, v, causal=True, num_band_blocks=num_band_blocks)
+o = flashinfer.moa_prefill(q, k, v, causal=True, num_band_blocks=num_band_blocks, kv_layout="NHD")
+##################
 
 k_trans = k.transpose(1, 2)
 v_trans = v.transpose(1, 2)
 
+### moa kernel ###
 o_trans = flashinfer.moa_prefill(q, k_trans, v_trans, causal=True, num_band_blocks=num_band_blocks, kv_layout="HND")
+##################
 
 print(f"difference between NHD and HND version: {torch.max(torch.abs(o - o_trans))}")
 
@@ -85,8 +87,12 @@ k_sdpa = repeat_kv(k_sdpa, num_qo_heads // num_kv_heads)
 v_sdpa = repeat_kv(v_sdpa, num_qo_heads // num_kv_heads)
 k_sdpa = k_sdpa.contiguous()
 v_sdpa = v_sdpa.contiguous()
+
+### sdpa ###
 o_sdpa = torch.nn.functional.scaled_dot_product_attention(
     q_sdpa, k_sdpa, v_sdpa, attn_mask=causal_mask, dropout_p=0.0
 ).transpose(1, 2).contiguous()
+############
+
 # check the results
-print(f"difference between moa kernel and sdpa: {torch.max(torch.abs(o - o_sdpa))}")
+print(f"difference between moa kernel and sdpa: {torch.max(torch.abs(o.float() - o_sdpa.float()))}")
