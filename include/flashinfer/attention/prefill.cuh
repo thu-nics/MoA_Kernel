@@ -2397,7 +2397,7 @@ cudaError_t PrefillMoADispatched(
         dim3 nthrs(32, num_warps_x, num_warps_z);
 
         FLASHINFER_CUDA_CALL(
-            cudaLaunchKernel((void*)moa_kernel, nblks, nthrs, moa_args, smem_size, stream));
+            cudaLaunchKernel((void*)moa_kernel, nblks, nthrs, moa_args, smem_size, 0));
       
       }
     })

@@ -11,6 +11,8 @@ parser.add_argument("--num_kv_heads", type=int, default=32, help="number of kv h
 parser.add_argument("--num_qo_heads", type=int, default=32, help="number of qo heads")
 args = parser.parse_args()
 
+## assume block size to be 64 ##
+
 device_id = args.device_id
 
 kv_len = args.kv_len
@@ -52,47 +54,50 @@ def create_block_mask(num_global_blocks, num_band_blocks, block_size, token_len)
 
     return blocked_causal_mask_expanded
 
-num_global_blocks = [1 for _ in range(num_qo_heads)]
-num_band_blocks = [random.randint(1, kv_len // 64) for _ in range(num_qo_heads)]
+for i in range(4):
+    print(f"device: {i}")
+    device_id = i
+    num_global_blocks = [1 for _ in range(num_qo_heads)]
+    num_band_blocks = [random.randint(1, kv_len // 64) for _ in range(num_qo_heads)]
 
-print("num band blocks for each head:")
-print(num_band_blocks)
+    print("num band blocks for each head:")
+    print(num_band_blocks)
 
-causal_mask = create_block_mask(num_global_blocks, num_band_blocks, 64, kv_len).to(device_id)
+    causal_mask = create_block_mask(num_global_blocks, num_band_blocks, 64, kv_len).to(device_id)
 
-q = torch.randn(1, qo_len, num_qo_heads, head_dim).half().to(device_id) # prefill attention
-k = torch.randn(1, kv_len, num_kv_heads, head_dim).half().to(device_id) 
-v = torch.randn(1, kv_len, num_kv_heads, head_dim).half().to(device_id) 
+    q = torch.randn(1, qo_len, num_qo_heads, head_dim).half().to(device_id) # prefill attention
+    k = torch.randn(1, kv_len, num_kv_heads, head_dim).half().to(device_id) 
+    v = torch.randn(1, kv_len, num_kv_heads, head_dim).half().to(device_id) 
 
-### moa kernel ###
-num_band_blocks = torch.tensor(num_band_blocks, dtype=torch.long).to(device_id)
-o = flashinfer.moa_prefill(q, k, v, causal=True, num_band_blocks=num_band_blocks, kv_layout="NHD")
-##################
+    ### moa kernel ###
+    num_band_blocks = torch.tensor(num_band_blocks, dtype=torch.long).to(device_id)
+    o = flashinfer.moa_prefill(q, k, v, causal=True, num_band_blocks=num_band_blocks, kv_layout="NHD")
+    ##################
 
-k_trans = k.transpose(1, 2)
-v_trans = v.transpose(1, 2)
+    k_trans = k.transpose(1, 2)
+    v_trans = v.transpose(1, 2)
 
-### moa kernel ###
-o_trans = flashinfer.moa_prefill(q, k_trans, v_trans, causal=True, num_band_blocks=num_band_blocks, kv_layout="HND")
-##################
+    ### moa kernel ###
+    o_trans = flashinfer.moa_prefill(q, k_trans, v_trans, causal=True, num_band_blocks=num_band_blocks, kv_layout="HND")
+    ##################
 
-print(f"difference between NHD and HND version: {torch.max(torch.abs(o - o_trans))}")
+    print(f"difference between NHD and HND version: {torch.max(torch.abs(o - o_trans))}")
 
-# expand the batch dimnesion for sdpa
-q_sdpa = q.clone().transpose(1, 2).contiguous()
-k_sdpa = k.clone().transpose(1, 2).contiguous()
-v_sdpa = v.clone().transpose(1, 2).contiguous()
+    # expand the batch dimnesion for sdpa
+    q_sdpa = q.clone().transpose(1, 2).contiguous()
+    k_sdpa = k.clone().transpose(1, 2).contiguous()
+    v_sdpa = v.clone().transpose(1, 2).contiguous()
 
-k_sdpa = repeat_kv(k_sdpa, num_qo_heads // num_kv_heads)
-v_sdpa = repeat_kv(v_sdpa, num_qo_heads // num_kv_heads)
-k_sdpa = k_sdpa.contiguous()
-v_sdpa = v_sdpa.contiguous()
+    k_sdpa = repeat_kv(k_sdpa, num_qo_heads // num_kv_heads)
+    v_sdpa = repeat_kv(v_sdpa, num_qo_heads // num_kv_heads)
+    k_sdpa = k_sdpa.contiguous()
+    v_sdpa = v_sdpa.contiguous()
 
-### sdpa ###
-o_sdpa = torch.nn.functional.scaled_dot_product_attention(
-    q_sdpa, k_sdpa, v_sdpa, attn_mask=causal_mask, dropout_p=0.0
-).transpose(1, 2).contiguous()
-############
+    ### sdpa ###
+    o_sdpa = torch.nn.functional.scaled_dot_product_attention(
+        q_sdpa, k_sdpa, v_sdpa, attn_mask=causal_mask, dropout_p=0.0
+    ).transpose(1, 2).contiguous()
+    ############
 
-# check the results
-print(f"difference between moa kernel and sdpa: {torch.max(torch.abs(o.float() - o_sdpa.float()))}")
+    # check the results
+    print(f"difference between moa kernel and sdpa: {torch.max(torch.abs(o.float() - o_sdpa.float()))}")

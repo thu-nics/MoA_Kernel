@@ -17,6 +17,7 @@
 
 #include "flashinfer_ops_prefill.h"
 #include "pytorch_extension_utils.h"
+#include <c10/cuda/CUDAGuard.h>
 
 using namespace flashinfer;
 
@@ -160,9 +161,12 @@ torch::Tensor moa_prefill(
     kv_stride_h = k.stride(0);
     kv_stride_n = k.stride(1);
   }
+
+  const at::cuda::OptionalCUDAGuard device_guard(device);
+
   
   CHECK_GQA_HEAD_DIVISIBLE(num_qo_heads, num_kv_heads);
-  cudaStream_t torch_current_stream = c10::cuda::getCurrentCUDAStream(device.index());
+  cudaStream_t torch_current_stream = nullptr;
   auto o = torch::empty_like(q, q.options());
 
   const MaskMode mask_mode = causal ? MaskMode::kCausal : MaskMode::kNone;
