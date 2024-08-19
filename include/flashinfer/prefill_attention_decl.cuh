@@ -39,6 +39,17 @@ cudaError_t SinglePrefillWithKVCacheDispatched(
     int32_t window_left, float logits_soft_cap, float sm_scale, float rope_scale, float rope_theta,
     cudaStream_t stream);
 
+template <uint32_t HEAD_DIM,
+          bool ALLOW_FP16_QK_REDUCTION, MaskMode MASK_MODE, typename DTypeQ, typename DTypeKV,
+          typename DTypeOut>
+cudaError_t PrefillMoADispatched(
+    DTypeQ* q, DTypeKV* k, DTypeKV* v, long* num_band_blocks, 
+    uint8_t* custom_mask, DTypeOut* o,
+    uint32_t num_qo_heads, uint32_t num_kv_heads, uint32_t qo_len, uint32_t kv_len,
+    uint32_t q_stride_n, uint32_t q_stride_h, uint32_t kv_stride_n, uint32_t kv_stride_h,
+    int32_t window_left, float sm_scale,
+    cudaStream_t stream);
+
 template <WarpLayout WARP_LAYOUT, uint32_t HEAD_DIM, LogitsPostHook LOGITS_POST_HOOK,
           PosEncodingMode pos_encoding_mode, bool ALLOW_FP16_QK_REDUCTION, MaskMode MASK_MODE,
           typename DTypeQ, typename DTypeKV, typename DTypeOut, typename IdType>

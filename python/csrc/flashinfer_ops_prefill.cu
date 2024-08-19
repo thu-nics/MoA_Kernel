@@ -20,6 +20,8 @@
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("single_prefill_with_kv_cache", &single_prefill_with_kv_cache,
         "Single-request prefill with KV-Cache operator, return logsumexp");
+  m.def("moa_prefill", &moa_prefill,
+         "moa prefill");
   m.def(
       "single_prefill_with_kv_cache_custom_mask", &single_prefill_with_kv_cache_custom_mask,
       "Single-request prefill with KV-Cache operator, user defined custom mask, return logsumexp");

@@ -28,14 +28,16 @@ import argparse
 import torch
 import torch.utils.cpp_extension as torch_cpp_ext
 
-import generate_single_decode_inst, generate_single_prefill_inst, generate_batch_paged_decode_inst, generate_batch_paged_prefill_inst, generate_batch_ragged_prefill_inst, generate_dispatch_inc
+import generate_single_decode_inst, generate_single_prefill_inst, generate_batch_paged_decode_inst, generate_batch_paged_prefill_inst, generate_batch_ragged_prefill_inst, generate_dispatch_inc, generate_moa_prefill_inst
 
 root = pathlib.Path(__name__).parent
 
 enable_bf16 = True
 # NOTE(Zihao): we haven't utilized fp8 tensor cores yet, so there is no
 # cuda arch check for fp8 at the moment.
-enable_fp8 = True
+# enable_fp8 = True
+enable_fp8 = False
+
 for cuda_arch_flags in torch_cpp_ext._get_cuda_arch_flags():
     arch = int(re.search("compute_\d+", cuda_arch_flags).group()[-2:])
     if arch < 75:
@@ -184,6 +186,29 @@ def get_instantiation_cu() -> Tuple[List[str], List[str]]:
             )
             write_if_different(root / prefix / fname, content)
 
+    # moa prefill
+    for (
+        head_dim,
+        allow_fp16_qk_reduction,
+        mask_mode,
+    ) in itertools.product(
+        head_dims,
+        allow_fp16_qk_reduction_options,
+        mask_modes,
+    ):
+        for dtype_q, dtype_kv in list(zip(prefill_dtypes, prefill_dtypes)):
+            fname = f"moa_prefill_head_{head_dim}_fp16qkred_{allow_fp16_qk_reduction}_mask_{mask_mode}_dtypeq_{dtype_q}_dtypekv_{dtype_kv}_dtypeout_{dtype_q}.cu"
+            files_prefill.append(prefix + "/" + fname)
+            content = generate_moa_prefill_inst.get_cu_file_str(
+                head_dim,
+                allow_fp16_qk_reduction,
+                mask_mode,
+                dtype_q,  # dtype_q
+                dtype_kv,  # dtype_kv
+                dtype_q,  # dtype_out
+            )
+            write_if_different(root / prefix / fname, content)
+
     # batch paged prefill files
     for (
         head_dim,
@@ -313,7 +338,7 @@ if __name__ == "__main__":
     files_prefill, files_decode = get_instantiation_cu()
     include_dirs = [
         str(root.resolve() / "include"),
-        str(root.resolve() / "3rdparty" / "cutlass" / "include"),  # for group gemm
+        # str(root.resolve() / "3rdparty" / "cutlass" / "include"),  # for group gemm
     ]
     extra_compile_args = {
         "cxx": [
@@ -342,7 +367,7 @@ if __name__ == "__main__":
                 "csrc/norm.cu",
                 "csrc/activation.cu",
                 "csrc/rope.cu",
-                "csrc/group_gemm.cu",
+                # "csrc/group_gemm.cu",
                 "csrc/quantization.cu",
             ],
             include_dirs=include_dirs,

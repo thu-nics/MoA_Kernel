@@ -16,7 +16,7 @@
 #pragma once
 #include <torch/extension.h>
 
-#include <flashinfer/group_gemm/handler.cuh>
+// #include <flashinfer/group_gemm/handler.cuh>
 #include <flashinfer/layout.cuh>
 #include <memory>
 
@@ -103,18 +103,18 @@ torch::Tensor packbits(torch::Tensor x, const std::string& bitorder);
 torch::Tensor segment_packbits(torch::Tensor x, torch::Tensor input_indptr,
                                torch::Tensor output_indptr, const std::string& bitorder);
 
-class CutlassSegmentGEMMPyTorchWrapper {
- public:
-  void RegisterWorkspaceBuffer(torch::Tensor workspace_buffer);
+// class CutlassSegmentGEMMPyTorchWrapper {
+//  public:
+//   void RegisterWorkspaceBuffer(torch::Tensor workspace_buffer);
 
-  torch::Tensor Forward(torch::Tensor seg_indptr, torch::Tensor weight_indices, torch::Tensor x,
-                        torch::Tensor weight, unsigned int batch_size, bool weight_column_major);
+//   torch::Tensor Forward(torch::Tensor seg_indptr, torch::Tensor weight_indices, torch::Tensor x,
+//                         torch::Tensor weight, unsigned int batch_size, bool weight_column_major);
 
-  CutlassSegmentGEMMPyTorchWrapper(torch::Tensor workspace_buffer)
-      : handler_(std::make_shared<flashinfer::group_gemm::CutlassSegmentGEMMHandler>()) {
-    RegisterWorkspaceBuffer(workspace_buffer);
-  }
+//   CutlassSegmentGEMMPyTorchWrapper(torch::Tensor workspace_buffer)
+//       : handler_(std::make_shared<flashinfer::group_gemm::CutlassSegmentGEMMHandler>()) {
+//     RegisterWorkspaceBuffer(workspace_buffer);
+//   }
 
- private:
-  std::shared_ptr<flashinfer::group_gemm::CutlassSegmentGEMMHandler> handler_;
-};
+//  private:
+//   std::shared_ptr<flashinfer::group_gemm::CutlassSegmentGEMMHandler> handler_;
+// };

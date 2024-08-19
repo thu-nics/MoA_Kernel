@@ -26,6 +26,12 @@ std::vector<torch::Tensor> single_prefill_with_kv_cache(
     int window_left, float logits_soft_cap, float sm_scale, float rope_scale, float rope_theta,
     bool return_lse);
 
+torch::Tensor moa_prefill(
+    torch::Tensor q, torch::Tensor k, torch::Tensor v, torch::Tensor num_band_blocks,
+    bool causal,
+    unsigned int layout, bool allow_fp16_qk_reduction,
+    int32_t window_left, float sm_scale);
+
 std::vector<torch::Tensor> single_prefill_with_kv_cache_custom_mask(
     torch::Tensor q, torch::Tensor k, torch::Tensor v, torch::Tensor packed_custom_mask,
     torch::Tensor tmp, unsigned int layout, unsigned int pos_encoding_mode,

@@ -406,6 +406,34 @@ def single_prefill_with_kv_cache_return_lse(
             True,  # return lse
         )
 
+def moa_prefill(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    num_band_blocks: Optional[torch.LongTensor] = None,
+    custom_mask: Optional[torch.Tensor] = None,
+    packed_custom_mask: Optional[torch.Tensor] = None,
+    causal: bool = False,
+    kv_layout: str = "NHD",
+    allow_fp16_qk_reduction: bool = False,
+    window_left: int = -1,
+    sm_scale: Optional[float] = None,
+):
+    if sm_scale is None:
+        sm_scale = 1.0 / math.sqrt(q.size(-1))
+        
+    return _prefill.moa_prefill(
+        q,
+        k,
+        v,
+        num_band_blocks,
+        causal,
+        TensorLayout[kv_layout].value,
+        allow_fp16_qk_reduction,
+        window_left,
+        sm_scale,
+    )
+
 
 def _compute_page_qk_indptr(
     qo_indptr: torch.Tensor,
