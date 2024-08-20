@@ -14,7 +14,7 @@ Using our PyTorch API is the easiest way to get started:
 
 ### Installation
 
-Ensure you are using **CUDA 12.4** and **torch 2.4**.
+Tested on **CUDA 12.4** and **torch 2.4**.
 
 Build from source for moa kernel:
 
@@ -27,7 +27,7 @@ FLASHINFER_LOGITS_POST_HOOKS=0 FLASHINFER_HEAD_DIMS=128 FLASHINFER_POS_ENCODING_
 ### Trying it out
 
 ```python
-python test.py
+python accuracy_test.py
 ```
 
 ### TODO

@@ -59,9 +59,11 @@ def create_block_mask(num_global_blocks, num_band_blocks, block_size, token_len)
 for i in range(4):
     print(f"device: {i}")
     device_id = i
-    num_global_blocks = [1 for _ in range(num_qo_heads)]
     num_band_blocks = [random.randint(1, kv_len // 64) for _ in range(num_qo_heads)]
-
+    num_global_blocks = [random.randint(1, 5) for _ in range(num_qo_heads)]
+    
+    print("num global blocks for each head:")
+    print(num_global_blocks)
     print("num band blocks for each head:")
     print(num_band_blocks)
 
@@ -76,14 +78,15 @@ for i in range(4):
 
     ### moa kernel ###
     num_band_blocks = torch.tensor(num_band_blocks, dtype=torch.long).to(device_id)
-    o = flashinfer.moa_prefill(q, k, v, causal=True, num_band_blocks=num_band_blocks, kv_layout="NHD")
+    num_global_blocks = torch.tensor(num_global_blocks, dtype=torch.long).to(device_id)
+    o = flashinfer.moa_prefill(q, k, v, causal=True, num_global_blocks=num_global_blocks, num_band_blocks=num_band_blocks, kv_layout="NHD")
     ##################
 
     k_trans = k.transpose(1, 2)
     v_trans = v.transpose(1, 2)
 
     ### moa kernel ###
-    o_trans = flashinfer.moa_prefill(q, k_trans, v_trans, causal=True, num_band_blocks=num_band_blocks, kv_layout="HND")
+    o_trans = flashinfer.moa_prefill(q, k_trans, v_trans, causal=True, num_global_blocks=num_global_blocks, num_band_blocks=num_band_blocks, kv_layout="HND")
     ##################
 
     print(f"difference between NHD and HND version: {torch.max(torch.abs(o - o_trans))}")
