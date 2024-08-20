@@ -1318,22 +1318,30 @@ template <MaskMode mask_mode,
           typename DTypeOut>
 __global__
 __launch_bounds__(num_warps_x* num_warps_z* warp_size) void SinglePrefillWithKVCacheMoAKernel(
-    DTypeQ* __restrict__ q, DTypeKV* __restrict__ k, DTypeKV* __restrict__ v, long* __restrict__ num_band_blocks,
+    DTypeQ* __restrict__ q, DTypeKV* __restrict__ k, DTypeKV* __restrict__ v, long* __restrict__ num_global_blocks, long* __restrict__ num_band_blocks,
     uint8_t* __restrict__ custom_mask, DTypeOut* __restrict__ o,
     const uint32_t qo_len, const uint32_t kv_len,
-    const uint_fastdiv group_size, const uint32_t q_stride_n, const uint32_t q_stride_h,
-    const uint32_t kv_stride_n, const uint32_t kv_stride_h, const int32_t maybe_window_left,
+    const uint_fastdiv group_size, 
+    const uint32_t q_stride_bz, const uint32_t q_stride_n, const uint32_t q_stride_h,
+    const uint32_t kv_stride_bz, const uint32_t kv_stride_n, const uint32_t kv_stride_h, const int32_t maybe_window_left,
     float sm_scale) {
   static_assert(sizeof(DTypeQ) == 2);
   static_assert(sizeof(DTypeOut) == 2);
   sm_scale *= math::log2e;
   const uint32_t lane_idx = threadIdx.x, warp_idx = get_warp_idx<num_warps_x, num_warps_z>();
-  const uint32_t bx = blockIdx.x, kv_head_idx = blockIdx.z;
+  const uint32_t bx = blockIdx.x, bz_idx = blockIdx.y, kv_head_idx = blockIdx.z;
+
+  q = q + bz_idx * q_stride_bz;
+  k = k + bz_idx * kv_stride_bz;
+  v = v + bz_idx * kv_stride_bz;
+  o = o + bz_idx * q_stride_bz;
+
   const uint32_t num_kv_heads = gridDim.z, num_qo_heads = num_kv_heads * group_size;
   constexpr uint32_t num_rows_per_cta = num_frags_x * num_warps_x * 16;
   const tensor_info_t qkv_info(qo_len, kv_len, num_qo_heads, num_kv_heads, q_stride_n, q_stride_h,
                                kv_stride_n, kv_stride_h, /*head_dim=*/num_frags_y * 16);
 
+  const int32_t global_blocks = num_global_blocks[kv_head_idx];
   const int32_t band_blocks = num_band_blocks[kv_head_idx];
   const int32_t block_idx_qo = (bx * num_warps_x + get_warp_idx_x<num_warps_x, num_warps_z>()) * num_frags_x * 16 / MOA_BLOCK_SIZE;
 
@@ -1437,7 +1445,7 @@ __launch_bounds__(num_warps_x* num_warps_z* warp_size) void SinglePrefillWithKVC
     int32_t block_idx_kv = (get_warp_idx_z<num_warps_x, num_warps_z>() + num_warps_z * iter) * num_frags_z * 16 / MOA_BLOCK_SIZE;
 
     
-    if (block_idx_kv == 0 || block_idx_kv >= block_idx_qo - band_blocks + 1){
+    if (block_idx_kv < global_blocks || block_idx_kv >= block_idx_qo - band_blocks + 1){
       // compute attention score
       compute_qk<LogitsPostHook::kNone, num_frags_x, num_frags_y, num_frags_z, swizzle_mode_q,
                 swizzle_mode_kv, DTypeQ, DTypeKV>(&qo_smem, &q_smem_offset_r, &k_smem,
@@ -1471,7 +1479,7 @@ __launch_bounds__(num_warps_x* num_warps_z* warp_size) void SinglePrefillWithKVC
     cp_async::wait_group<1>();
     block.sync();
 
-    if (block_idx_kv == 0 || block_idx_kv >= block_idx_qo - band_blocks + 1){
+    if (block_idx_kv < global_blocks || block_idx_kv >= block_idx_qo - band_blocks + 1){
       // compute sfm*v
       compute_sfm_v<num_frags_x, num_frags_y, num_frags_z, swizzle_mode_kv, DTypeQ, DTypeKV>(
           &v_smem, &v_smem_offset_r, s_frag, o_frag, d);
@@ -2279,10 +2287,10 @@ template <uint32_t HEAD_DIM,
           bool ALLOW_FP16_QK_REDUCTION, MaskMode MASK_MODE, typename DTypeQ, typename DTypeKV,
           typename DTypeOut>
 cudaError_t PrefillMoADispatched(
-    DTypeQ* q, DTypeKV* k, DTypeKV* v, long* num_band_blocks,
+    DTypeQ* q, DTypeKV* k, DTypeKV* v, long* num_global_blocks, long* num_band_blocks,
     uint8_t* custom_mask, DTypeOut* o,
-    uint32_t num_qo_heads, uint32_t num_kv_heads, uint32_t qo_len, uint32_t kv_len,
-    uint32_t q_stride_n, uint32_t q_stride_h, uint32_t kv_stride_n, uint32_t kv_stride_h,
+    uint32_t num_qo_heads, uint32_t num_kv_heads, uint32_t qo_len, uint32_t kv_len, uint32_t bz,
+    uint32_t q_stride_bz, uint32_t q_stride_n, uint32_t q_stride_h, uint32_t kv_stride_bz, uint32_t kv_stride_n, uint32_t kv_stride_h,
     int32_t window_left, float sm_scale,
     cudaStream_t stream) {
   
@@ -2381,19 +2389,22 @@ cudaError_t PrefillMoADispatched(
         void* moa_args[] = {(void*)&q,
                         (void*)&k,
                         (void*)&v,
+                        (void*)&num_global_blocks,
                         (void*)&num_band_blocks,
                         (void*)&custom_mask,
                         (void*)&o,
                         (void*)&qo_len,
                         (void*)&kv_len,
                         (void*)&group_size_fastdiv,
+                        (void*)&q_stride_bz,
                         (void*)&q_stride_n,
                         (void*)&q_stride_h,
+                        (void*)&kv_stride_bz,
                         (void*)&kv_stride_n,
                         (void*)&kv_stride_h,
                         (void*)&window_left,
                         (void*)&sm_scale};
-        dim3 nblks(ceil_div(qo_len * group_size, num_rows_per_cta), 1, num_kv_heads);
+        dim3 nblks(ceil_div(qo_len * group_size, num_rows_per_cta), bz, num_kv_heads);
         dim3 nthrs(32, num_warps_x, num_warps_z);
 
         FLASHINFER_CUDA_CALL(

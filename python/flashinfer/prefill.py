@@ -410,6 +410,7 @@ def moa_prefill(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
+    num_global_blocks: Optional[torch.LongTensor] = None,
     num_band_blocks: Optional[torch.LongTensor] = None,
     custom_mask: Optional[torch.Tensor] = None,
     packed_custom_mask: Optional[torch.Tensor] = None,
@@ -422,20 +423,18 @@ def moa_prefill(
     if sm_scale is None:
         sm_scale = 1.0 / math.sqrt(q.size(-1))
 
-    if len(q.shape) == 4:
-        assert(q.size(0) == 1)
-        q = q.squeeze(0)
-    if len(k.shape) == 4:
-        assert(k.size(0) == 1)
-        k = k.squeeze(0)
-    if len(v.shape) == 4:
-        assert(v.size(0) == 1)
-        v = v.squeeze(0)
+    num_qo_heads = q.size(2)
+    if num_global_blocks is None:
+        num_global_blocks = torch.ones(num_qo_heads, dtype=torch.long, device=q.device)
+
+    if num_band_blocks is None:
+        num_band_blocks = torch.full((num_qo_heads,), 65536, dtype=torch.long, device=q.device)
         
     o = _prefill.moa_prefill(
         q,
         k,
         v,
+        num_global_blocks,
         num_band_blocks,
         causal,
         TensorLayout[kv_layout].value,
@@ -444,7 +443,7 @@ def moa_prefill(
         sm_scale,
     )
 
-    return o.unsqueeze(0)
+    return o
 
 
 def _compute_page_qk_indptr(

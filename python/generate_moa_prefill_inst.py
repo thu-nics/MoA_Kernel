@@ -24,10 +24,10 @@ def get_cu_file_str(
 namespace flashinfer {{
 
 template cudaError_t PrefillMoADispatched<{head_dim}, {allow_fp16_qk_reduction}, {mask_mode}, {dtype_q}, {dtype_kv}, {dtype_out}>(
-    {dtype_q}* q, {dtype_kv}* k, {dtype_kv}* v, long* num_band_blocks,
+    {dtype_q}* q, {dtype_kv}* k, {dtype_kv}* v, long* num_global_blocks, long* num_band_blocks,
     uint8_t* custom_mask, {dtype_out}* o,
-    uint32_t num_qo_heads, uint32_t num_kv_heads, uint32_t qo_len, uint32_t kv_len,
-    uint32_t q_stride_n, uint32_t q_stride_h, uint32_t kv_stride_n, uint32_t kv_stride_h, int32_t window_left,
+    uint32_t num_qo_heads, uint32_t num_kv_heads, uint32_t qo_len, uint32_t kv_len, uint32_t bz,
+    uint32_t q_stride_bz, uint32_t q_stride_n, uint32_t q_stride_h, uint32_t kv_stride_bz, uint32_t kv_stride_n, uint32_t kv_stride_h, int32_t window_left,
     float sm_scale, cudaStream_t stream);
 
 }}

@@ -120,7 +120,7 @@ std::vector<torch::Tensor> single_prefill_with_kv_cache(
 }
 
 torch::Tensor moa_prefill(
-    torch::Tensor q, torch::Tensor k, torch::Tensor v, torch::Tensor num_band_blocks, 
+    torch::Tensor q, torch::Tensor k, torch::Tensor v, torch::Tensor num_global_blocks, torch::Tensor num_band_blocks, 
     bool causal,
     unsigned int layout, bool allow_fp16_qk_reduction,
     int32_t window_left, float sm_scale) {
@@ -130,36 +130,43 @@ torch::Tensor moa_prefill(
   auto device = q.device();
   CHECK_EQ(k.device(), device);
   CHECK_EQ(v.device(), device);
+  CHECK_EQ(num_global_blocks.device(), device);
   CHECK_EQ(num_band_blocks.device(), device);
-  CHECK_DIM(3, q);
-  CHECK_DIM(3, k);
-  CHECK_DIM(3, v);
+  CHECK_DIM(4, q);
+  CHECK_DIM(4, k);
+  CHECK_DIM(4, v);
+  CHECK_DIM(1, num_global_blocks);
   CHECK_DIM(1, num_band_blocks);
   CHECK_SHAPE(k, v);
-  CHECK_EQ(q.stride(2), 1);
-  CHECK_EQ(k.stride(2), 1);
-  CHECK_EQ(v.stride(2), 1);
-  CHECK_EQ(q.size(2), k.size(2));
+  // CHECK_EQ(q.stride(3), 1);
+  CHECK_CONTIGUOUS(q)
+  CHECK_EQ(k.stride(3), 1);
+  CHECK_EQ(v.stride(3), 1);
+  CHECK_EQ(q.size(3), k.size(3));
   CHECK_EQ(q.scalar_type(), k.scalar_type());
   CHECK_EQ(q.scalar_type(), v.scalar_type());
+  CHECK_EQ(num_global_blocks.scalar_type(), torch::kLong);
   CHECK_EQ(num_band_blocks.scalar_type(), torch::kLong);
-  unsigned int head_dim = q.size(2);
+  unsigned int head_dim = q.size(3);
+  unsigned int bz = q.size(0);
   unsigned int kv_len, qo_len, num_kv_heads, num_qo_heads;
   QKVLayout kv_layout = static_cast<QKVLayout>(layout);
-  qo_len = q.size(0);
-  num_qo_heads = q.size(1);
+  qo_len = q.size(1);
+  num_qo_heads = q.size(2);
+  CHECK_EQ(num_global_blocks.size(0), num_qo_heads);
   CHECK_EQ(num_band_blocks.size(0), num_qo_heads);
-  uint32_t q_stride_n = q.stride(0), q_stride_h = q.stride(1), kv_stride_n, kv_stride_h;
+  uint32_t q_stride_bz = q.stride(0), kv_stride_bz = k.stride(0);
+  uint32_t q_stride_n = q.stride(1), q_stride_h = q.stride(2), kv_stride_n, kv_stride_h;
   if (kv_layout == QKVLayout::kNHD) {
-    kv_len = k.size(0);
-    num_kv_heads = k.size(1);
-    kv_stride_n = k.stride(0);
-    kv_stride_h = k.stride(1);
-  } else {  // QKVLayout::kHND
     kv_len = k.size(1);
-    num_kv_heads = k.size(0);
-    kv_stride_h = k.stride(0);
+    num_kv_heads = k.size(2);
     kv_stride_n = k.stride(1);
+    kv_stride_h = k.stride(2);
+  } else {  // QKVLayout::kHND
+    kv_len = k.size(2);
+    num_kv_heads = k.size(1);
+    kv_stride_h = k.stride(1);
+    kv_stride_n = k.stride(2);
   }
 
   const at::cuda::OptionalCUDAGuard device_guard(device);
@@ -188,10 +195,12 @@ torch::Tensor moa_prefill(
                               static_cast<c_type*>(q.data_ptr()),
                               static_cast<c_type*>(k.data_ptr()),
                               static_cast<c_type*>(v.data_ptr()),
+                              static_cast<long*>(num_global_blocks.data_ptr()),
                               static_cast<long*>(num_band_blocks.data_ptr()),
                               /*custom_mask*/nullptr, static_cast<c_type*>(o.data_ptr()),
-                              num_qo_heads, num_kv_heads, qo_len, kv_len, q_stride_n, q_stride_h,
-                              kv_stride_n, kv_stride_h, window_left, sm_scale, torch_current_stream);
+                              num_qo_heads, num_kv_heads, qo_len, kv_len, bz,
+                              q_stride_bz, q_stride_n, q_stride_h,
+                              kv_stride_bz, kv_stride_n, kv_stride_h, window_left, sm_scale, torch_current_stream);
                   TORCH_CHECK(status == cudaSuccess,
                               "PrefillMoA kernel launch failed, error: " +
                                   std::string(cudaGetErrorString(status)));

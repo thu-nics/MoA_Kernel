@@ -6,6 +6,7 @@ from transformers.models.llama.modeling_llama import repeat_kv
 
 parser = argparse.ArgumentParser(description='Test the performance of the flashinfer')
 parser.add_argument("--device_id", type=int, default=0, help="device id")
+parser.add_argument("--batch_size", type=int, default=1, help="batch size")
 parser.add_argument("--kv_len", type=int, default=12201, help="kv length")
 parser.add_argument("--num_kv_heads", type=int, default=32, help="number of kv heads")
 parser.add_argument("--num_qo_heads", type=int, default=32, help="number of qo heads")
@@ -15,6 +16,7 @@ args = parser.parse_args()
 
 device_id = args.device_id
 
+batch_size = args.batch_size
 kv_len = args.kv_len
 qo_len = kv_len
 assert(kv_len > 64)
@@ -65,9 +67,12 @@ for i in range(4):
 
     causal_mask = create_block_mask(num_global_blocks, num_band_blocks, 64, kv_len).to(device_id)
 
-    q = torch.randn(1, qo_len, num_qo_heads, head_dim).half().to(device_id) # prefill attention
-    k = torch.randn(1, kv_len, num_kv_heads, head_dim).half().to(device_id) 
-    v = torch.randn(1, kv_len, num_kv_heads, head_dim).half().to(device_id) 
+    q = torch.randn(batch_size, qo_len, num_qo_heads, head_dim).half().to(device_id) # prefill attention
+    k = torch.randn(batch_size, kv_len, num_kv_heads, head_dim).half().to(device_id) 
+    v = torch.randn(batch_size, kv_len, num_kv_heads, head_dim).half().to(device_id) 
+
+    print(f"q shape: {q.shape}")
+    print(f"kv shape: {k.shape}")
 
     ### moa kernel ###
     num_band_blocks = torch.tensor(num_band_blocks, dtype=torch.long).to(device_id)

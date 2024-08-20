@@ -27,7 +27,7 @@ std::vector<torch::Tensor> single_prefill_with_kv_cache(
     bool return_lse);
 
 torch::Tensor moa_prefill(
-    torch::Tensor q, torch::Tensor k, torch::Tensor v, torch::Tensor num_band_blocks,
+    torch::Tensor q, torch::Tensor k, torch::Tensor v, torch::Tensor num_global_blocks, torch::Tensor num_band_blocks,
     bool causal,
     unsigned int layout, bool allow_fp16_qk_reduction,
     int32_t window_left, float sm_scale);
