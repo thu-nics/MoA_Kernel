@@ -43,7 +43,7 @@ template <uint32_t HEAD_DIM,
           bool ALLOW_FP16_QK_REDUCTION, MaskMode MASK_MODE, typename DTypeQ, typename DTypeKV,
           typename DTypeOut>
 cudaError_t PrefillMoADispatched(
-    DTypeQ* q, DTypeKV* k, DTypeKV* v, long* num_global_blocks, long* num_band_blocks, 
+    DTypeQ* q, DTypeKV* k, DTypeKV* v, long* num_global_blocks, long* num_band_blocks, long* left_padding_lengths,
     uint8_t* custom_mask, DTypeOut* o,
     uint32_t num_qo_heads, uint32_t num_kv_heads, uint32_t qo_len, uint32_t kv_len, uint32_t bz,
     uint32_t q_stride_bz, uint32_t q_stride_n, uint32_t q_stride_h, uint32_t kv_stride_bz, uint32_t kv_stride_n, uint32_t kv_stride_h,

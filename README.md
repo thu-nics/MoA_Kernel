@@ -31,7 +31,7 @@ python accuracy_test.py
 ```
 
 ### TODO
-- [] support batch size > 1
+- [x] support batch size > 1
 - [] acceleration of prefill kernel
 - [] support GQA
 

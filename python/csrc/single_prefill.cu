@@ -121,6 +121,7 @@ std::vector<torch::Tensor> single_prefill_with_kv_cache(
 
 torch::Tensor moa_prefill(
     torch::Tensor q, torch::Tensor k, torch::Tensor v, torch::Tensor num_global_blocks, torch::Tensor num_band_blocks, 
+    torch::Tensor left_padding_lengths,
     bool causal,
     unsigned int layout, bool allow_fp16_qk_reduction,
     int32_t window_left, float sm_scale) {
@@ -132,11 +133,13 @@ torch::Tensor moa_prefill(
   CHECK_EQ(v.device(), device);
   CHECK_EQ(num_global_blocks.device(), device);
   CHECK_EQ(num_band_blocks.device(), device);
+  CHECK_EQ(left_padding_lengths.device(), device);
   CHECK_DIM(4, q);
   CHECK_DIM(4, k);
   CHECK_DIM(4, v);
   CHECK_DIM(1, num_global_blocks);
   CHECK_DIM(1, num_band_blocks);
+  CHECK_DIM(1, left_padding_lengths);
   CHECK_SHAPE(k, v);
   // CHECK_EQ(q.stride(3), 1);
   CHECK_CONTIGUOUS(q)
@@ -153,6 +156,7 @@ torch::Tensor moa_prefill(
   QKVLayout kv_layout = static_cast<QKVLayout>(layout);
   qo_len = q.size(1);
   num_qo_heads = q.size(2);
+  CHECK_EQ(left_padding_lengths.size(0), bz);
   CHECK_EQ(num_global_blocks.size(0), num_qo_heads);
   CHECK_EQ(num_band_blocks.size(0), num_qo_heads);
   uint32_t q_stride_bz = q.stride(0), kv_stride_bz = k.stride(0);
@@ -197,6 +201,7 @@ torch::Tensor moa_prefill(
                               static_cast<c_type*>(v.data_ptr()),
                               static_cast<long*>(num_global_blocks.data_ptr()),
                               static_cast<long*>(num_band_blocks.data_ptr()),
+                              static_cast<long*>(left_padding_lengths.data_ptr()),
                               /*custom_mask*/nullptr, static_cast<c_type*>(o.data_ptr()),
                               num_qo_heads, num_kv_heads, qo_len, kv_len, bz,
                               q_stride_bz, q_stride_n, q_stride_h,

@@ -2,19 +2,19 @@ import torch
 import flashinfer
 import random
 import argparse
+import icecream
 from transformers.models.llama.modeling_llama import repeat_kv
+from transformers.models.llama.modeling_llama import _prepare_4d_causal_attention_mask_for_sdpa, _prepare_4d_attention_mask
 
 parser = argparse.ArgumentParser(description='Test the performance of the flashinfer')
-parser.add_argument("--device_id", type=int, default=0, help="device id")
-parser.add_argument("--batch_size", type=int, default=1, help="batch size")
-parser.add_argument("--kv_len", type=int, default=12201, help="kv length")
+parser.add_argument("--num_devices", type=int, default=1, help="device id")
+parser.add_argument("--batch_size", type=int, default=4, help="batch size")
+parser.add_argument("--kv_len", type=int, default=6001, help="kv length")
 parser.add_argument("--num_kv_heads", type=int, default=32, help="number of kv heads")
 parser.add_argument("--num_qo_heads", type=int, default=32, help="number of qo heads")
 args = parser.parse_args()
 
 ## assume block size to be 64 ##
-
-device_id = args.device_id
 
 batch_size = args.batch_size
 kv_len = args.kv_len
@@ -24,6 +24,22 @@ num_kv_heads = args.num_kv_heads
 head_dim = 128
 num_qo_heads = args.num_qo_heads
 
+padding_mask = torch.ones(batch_size, kv_len, dtype=torch.int64)
+padding_lengths = torch.zeros((batch_size, ), dtype=torch.long, device='cuda')
+
+# randomly pad a few tokens on the left
+for i in range(batch_size):
+    # temp_len = random.randint(0, 32)
+    temp_len = random.randint(0, 64)
+    padding_mask[i, : temp_len] = 0
+    padding_lengths[i] = temp_len
+
+padding_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+    padding_mask, 
+    (batch_size, kv_len), 
+    torch.randn(batch_size, kv_len, num_kv_heads * head_dim, device='cuda', dtype=torch.float16), 
+    0)
+padding_mask = (padding_mask == 0)
 assert(num_kv_heads == num_qo_heads)
 
 def create_block_mask(num_global_blocks, num_band_blocks, block_size, token_len):
@@ -56,7 +72,7 @@ def create_block_mask(num_global_blocks, num_band_blocks, block_size, token_len)
 
     return blocked_causal_mask_expanded
 
-for i in range(4):
+for i in range(args.num_devices):
     print(f"device: {i}")
     device_id = i
     num_band_blocks = [random.randint(1, kv_len // 64) for _ in range(num_qo_heads)]
@@ -68,6 +84,9 @@ for i in range(4):
     print(num_band_blocks)
 
     causal_mask = create_block_mask(num_global_blocks, num_band_blocks, 64, kv_len).to(device_id)
+    # calculate the and of causal mask and padding mask
+    if isinstance(padding_mask, torch.Tensor):
+        causal_mask = causal_mask.unsqueeze(0) & (padding_mask.to(torch.bool).to(device_id))
 
     q = torch.randn(batch_size, qo_len, num_qo_heads, head_dim).half().to(device_id) # prefill attention
     k = torch.randn(batch_size, kv_len, num_kv_heads, head_dim).half().to(device_id) 
@@ -79,17 +98,18 @@ for i in range(4):
     ### moa kernel ###
     num_band_blocks = torch.tensor(num_band_blocks, dtype=torch.long).to(device_id)
     num_global_blocks = torch.tensor(num_global_blocks, dtype=torch.long).to(device_id)
-    o = flashinfer.moa_prefill(q, k, v, causal=True, num_global_blocks=num_global_blocks, num_band_blocks=num_band_blocks, kv_layout="NHD")
+    o = flashinfer.moa_prefill(q, k, v, left_padding_lengths=padding_lengths, causal=True, num_global_blocks=num_global_blocks, num_band_blocks=num_band_blocks, kv_layout="NHD")
     ##################
 
     k_trans = k.transpose(1, 2)
     v_trans = v.transpose(1, 2)
 
     ### moa kernel ###
-    o_trans = flashinfer.moa_prefill(q, k_trans, v_trans, causal=True, num_global_blocks=num_global_blocks, num_band_blocks=num_band_blocks, kv_layout="HND")
+    o_trans = flashinfer.moa_prefill(q, k_trans, v_trans, left_padding_lengths=padding_lengths, causal=True, num_global_blocks=num_global_blocks, num_band_blocks=num_band_blocks, kv_layout="HND")
     ##################
 
-    print(f"difference between NHD and HND version: {torch.max(torch.abs(o - o_trans))}")
+    print(f"difference between NHD and HND version: ")
+    icecream.ic(torch.max(torch.abs(o - o_trans)))
 
     # expand the batch dimnesion for sdpa
     q_sdpa = q.clone().transpose(1, 2).contiguous()
@@ -108,4 +128,7 @@ for i in range(4):
     ############
 
     # check the results
-    print(f"difference between moa kernel and sdpa: {torch.max(torch.abs(o.float() - o_sdpa.float()))}")
+    print(f"difference between moa and sdpa: ")
+    for j in range(batch_size):
+        padding_len = padding_lengths[j]
+        icecream.ic(torch.max(torch.abs(o[j, padding_len:] - o_sdpa[j, padding_len:])))

@@ -412,8 +412,7 @@ def moa_prefill(
     v: torch.Tensor,
     num_global_blocks: Optional[torch.LongTensor] = None,
     num_band_blocks: Optional[torch.LongTensor] = None,
-    custom_mask: Optional[torch.Tensor] = None,
-    packed_custom_mask: Optional[torch.Tensor] = None,
+    left_padding_lengths: Optional[torch.LongTensor] = None,
     causal: bool = False,
     kv_layout: str = "NHD",
     allow_fp16_qk_reduction: bool = False,
@@ -429,13 +428,18 @@ def moa_prefill(
 
     if num_band_blocks is None:
         num_band_blocks = torch.full((num_qo_heads,), 65536, dtype=torch.long, device=q.device)
-        
+
+    if left_padding_lengths is None:
+        batch_size = q.size(0)
+        left_padding_lengths = torch.full((batch_size,), 0, dtype=torch.long, device=q.device)
+
     o = _prefill.moa_prefill(
         q,
         k,
         v,
         num_global_blocks,
         num_band_blocks,
+        left_padding_lengths,
         causal,
         TensorLayout[kv_layout].value,
         allow_fp16_qk_reduction,
