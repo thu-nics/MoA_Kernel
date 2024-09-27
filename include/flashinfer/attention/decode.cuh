@@ -359,6 +359,151 @@ __global__ void SingleDecodeWithKVCacheKernel(DTypeQ* __restrict__ q, DTypeKV* _
 }
 
 /*!
+ * \brief FlashAttention decoding cuda kernel with kv-cache for a single request
+ * \tparam vec_size A template integer indicates the vector size
+ * \tparam bdx A template integer indicates the block size in x dimension
+ * \tparam bdy A template integer indicates the block size in y dimension
+ * \tparam DTypeQ A template type indicates the query data type
+ * \tparam DTypeKV A template type indicates the key-value data type
+ * \tparam DTypeOut A template type indicates the output data type
+ * \param q [batch_size, num_qo_heads, head_dim] The query matrix
+ * \param k [batch_size, ..., head_dim] The key matrix in kv-cache
+ * \param v [batch_size, ..., head_dim] The value matrix in kv-cache
+ * \param o [batch_size, num_qo_heads, head_dim] The output matrix
+ * \param info The tensor info of k/v matrices
+ * \param sm_scale A float indicates the scale applied to pre-softmax logits
+ * \param head_dim A integer indicates the head dimension
+ */
+template <uint32_t num_stages_smem, uint32_t tile_size_per_bdx, uint32_t vec_size, uint32_t bdx,
+          uint32_t bdz, typename DTypeQ, typename DTypeKV, typename DTypeOut>
+__global__ void SingleDecodeWithKVCacheKernelMoA(DTypeQ* __restrict__ q, DTypeKV* __restrict__ k,
+                                              DTypeKV* __restrict__ v, DTypeOut* __restrict__ o,
+                                              uint32_t num_heads,
+                                              uint32_t q_stride_bz, uint32_t q_stride_h,
+                                              uint32_t kv_stride_bz, uint32_t kv_stride_n,
+                                              uint32_t o_stride_bz, uint32_t o_stride_h,
+                                              long* __restrict__ Start, long* __restrict__ Length,
+                                              float sm_scale) {
+  auto block = cg::this_thread_block();
+  auto grid = cg::this_grid();
+  sm_scale *= math::log2e;
+
+  constexpr uint32_t head_dim = bdx * vec_size;
+  uint32_t kv_head_idx = blockIdx.y;
+  uint32_t qo_head_idx = kv_head_idx + threadIdx.y;
+  uint32_t bz = blockIdx.x;
+
+  long start = Start[qo_head_idx];
+  long seq_len = Length[qo_head_idx];
+
+  q = q + bz * q_stride_bz;
+  k = k + start * kv_stride_n + bz * kv_stride_bz;
+  v = v + start * kv_stride_n + bz * kv_stride_bz;
+  o = o + bz * o_stride_bz;
+
+  extern __shared__ uint8_t smem[];
+  DTypeKV* k_smem = (DTypeKV*)smem;
+  DTypeKV* v_smem = (DTypeKV*)(smem + num_stages_smem * tile_size_per_bdx * bdz * head_dim *
+                                          sizeof(DTypeKV));
+  float* smem_md = (float*)(smem + 2 * num_stages_smem * tile_size_per_bdx * bdz * head_dim *
+                                       sizeof(DTypeKV));
+
+  uint32_t tx = threadIdx.x, tz = threadIdx.z;
+  vec_t<float, vec_size> q_vec;
+  vec_t<float, vec_size> freq;
+
+  // do not apply rotary embedding to q matrix
+  q_vec.cast_load(q + qo_head_idx * q_stride_h + tx * vec_size);
+
+  // multiple q_vec by sm_scale
+#pragma unroll
+  for (uint32_t i = 0; i < vec_size; ++i) {
+    q_vec[i] *= sm_scale;
+  }
+  block.sync();
+
+  // preload k tiles and v tiles
+  uint32_t producer_kv_idx_base = 0;
+  constexpr uint32_t vec_bits = sizeof(DTypeKV) * vec_size * 8;
+#pragma unroll
+  for (uint32_t iter = 0; iter < num_stages_smem; ++iter) {
+    for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
+      cp_async::pred_load<vec_bits, PrefetchMode::kPrefetch, SharedMemFillMode::kNoFill>(
+          k_smem + ((iter * bdz + tz) * tile_size_per_bdx + j) * head_dim +
+              tx * vec_size,
+          k + (producer_kv_idx_base + tz * tile_size_per_bdx + j) * kv_stride_n + tx * vec_size,
+          producer_kv_idx_base + tz * tile_size_per_bdx + j < seq_len);
+    }
+    cp_async::commit_group();
+    for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
+      cp_async::pred_load<vec_bits, PrefetchMode::kPrefetch, SharedMemFillMode::kFillZero>(
+          v_smem + ((iter * bdz + tz) * tile_size_per_bdx + j) * head_dim +
+              tx * vec_size,
+          v + (producer_kv_idx_base + tz * tile_size_per_bdx + j) * kv_stride_n + tx * vec_size,
+          producer_kv_idx_base + tz * tile_size_per_bdx + j < seq_len);
+    }
+    cp_async::commit_group();
+    producer_kv_idx_base += bdz * tile_size_per_bdx;
+  }
+
+  // pipelining k/v tiles loading and state updating
+  uint32_t consumer_kv_idx_base = 0, stage_idx = 0;
+  state_t<vec_size> st_local;
+  float s[tile_size_per_bdx];
+
+#pragma unroll 2
+  for (uint32_t iter = 0; iter < ceil_div(seq_len, tile_size_per_bdx * bdz); ++iter) {
+    // compute qk
+    cp_async::wait_group<2 * num_stages_smem - 1>();
+    block.sync();
+    compute_qk<LogitsPostHook::kNone, PosEncodingMode::kNone, vec_size, bdx, tile_size_per_bdx>(
+        k_smem + (stage_idx * bdz + tz) * tile_size_per_bdx * head_dim, stage_idx, q_vec,
+        freq, consumer_kv_idx_base, iter * tile_size_per_bdx * bdz, 0,
+        seq_len, seq_len - 1, 0, s, st_local, -1);
+    block.sync();
+    // load k
+    for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
+      cp_async::pred_load<vec_bits, PrefetchMode::kPrefetch, SharedMemFillMode::kNoFill>(
+          k_smem + ((stage_idx * bdz + tz) * tile_size_per_bdx + j) * head_dim +
+              tx * vec_size,
+          k + (producer_kv_idx_base + tz * tile_size_per_bdx + j) * kv_stride_n + tx * vec_size,
+          producer_kv_idx_base + tz * tile_size_per_bdx + j < seq_len);
+    }
+    cp_async::commit_group();
+
+    // update m/d/o state
+    cp_async::wait_group<2 * num_stages_smem - 1>();
+    block.sync();
+    update_local_state<vec_size, bdx, tile_size_per_bdx>(
+        v_smem + (stage_idx * bdz + tz) * tile_size_per_bdx * head_dim, s, stage_idx,
+        st_local);
+    block.sync();
+
+    // load v
+    for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
+      cp_async::pred_load<vec_bits, PrefetchMode::kPrefetch, SharedMemFillMode::kFillZero>(
+          v_smem + ((stage_idx * bdz + tz) * tile_size_per_bdx + j) * head_dim +
+              tx * vec_size,
+          v + (producer_kv_idx_base + tz * tile_size_per_bdx + j) * kv_stride_n + tx * vec_size,
+          producer_kv_idx_base + tz * tile_size_per_bdx + j < seq_len);
+    }
+    cp_async::commit_group();
+
+    stage_idx = (stage_idx + 1) % num_stages_smem;
+    producer_kv_idx_base += tile_size_per_bdx * bdz;
+    consumer_kv_idx_base += tile_size_per_bdx * bdz;
+  }
+  cp_async::wait_group<0>();
+  block.sync();
+
+  // sync local state of all warps inside a threadblock
+  sync_state<vec_size, bdx, 1, bdz>(st_local, reinterpret_cast<float*>(smem), smem_md);
+  st_local.normalize();
+
+  st_local.o.cast_store(o + qo_head_idx * head_dim + tx * vec_size);
+}
+
+/*!
  * \brief FlashAttention decoding cuda kernel with paged kv-cache for multiple requests
  * \tparam logits_post_hook The logits post hook used in the kernel
  * \tparam pos_encoding_mode The positional encoding mode
@@ -712,6 +857,66 @@ cudaError_t SingleDecodeWithKVCacheDispatched(DTypeQ* q, DTypeKV* k, DTypeKV* v,
       FLASHINFER_CUDA_CALL(
           MergeStates(tmp, tmp_lse, o, nullptr, num_chunks, 1, num_qo_heads, HEAD_DIM, stream));
     }
+  });
+  return cudaSuccess;
+}
+
+template <uint32_t HEAD_DIM,
+          typename DTypeQ, typename DTypeKV, typename DTypeOut>
+cudaError_t SingleDecodeWithKVCacheDispatchedMoA(DTypeQ* q, DTypeKV* k, DTypeKV* v, DTypeOut* o,
+                                              uint32_t batch_size,
+                                              uint32_t num_heads,
+                                              uint32_t q_stride_bz, uint32_t q_stride_h,
+                                              uint32_t kv_stride_bz, uint32_t kv_stride_n,
+                                              uint32_t o_stride_bz, uint32_t o_stride_h,
+                                              long* Start, long* Length,
+                                              float sm_scale,
+                                              cudaStream_t stream) {
+  int window_left = 0;
+  float logits_soft_cap = -1;
+
+  const float rope_rcp_scale = 0.0f;
+  const float rope_rcp_theta = 0.0f;
+  constexpr uint32_t vec_size = std::max(16UL / sizeof(DTypeKV), HEAD_DIM / 32UL);
+  constexpr uint32_t num_stages_smem = 2U;
+  constexpr uint32_t bdx = HEAD_DIM / vec_size;
+  uint32_t num_qo_heads = num_heads;
+  uint32_t num_kv_heads = num_heads;
+  static_assert(bdx <= 32U);
+  DISPATCH_GQA_GROUP_SIZE(num_qo_heads / num_kv_heads, GROUP_SIZE, {
+    constexpr uint32_t bdy = GROUP_SIZE;
+    constexpr uint32_t num_threads =
+        std::max(get_heuristic_num_threads(GROUP_SIZE, sizeof(DTypeKV)), bdx * bdy);
+    constexpr uint32_t bdz = num_threads / (bdx * bdy);
+    constexpr uint32_t tile_size_per_bdx = GROUP_SIZE == 1 ? (sizeof(DTypeKV) == 1 ? 2U : 8U) : 1U;
+    const uint32_t smem_size =
+        2U * num_stages_smem * bdy * tile_size_per_bdx * bdz * HEAD_DIM * sizeof(DTypeKV) +
+        2U * bdy * bdz * sizeof(float);
+
+    auto kernel = SingleDecodeWithKVCacheKernelMoA<num_stages_smem, tile_size_per_bdx, vec_size, bdx, bdz, DTypeQ, DTypeKV, DTypeOut>;
+    FLASHINFER_CUDA_CALL(
+        cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+
+    // no need to use partition-kv kernel
+    dim3 nblks = dim3(batch_size, num_kv_heads);
+    dim3 nthrs = dim3(bdx, bdy, bdz);
+    void* args[] = {(void*)&q,
+                    (void*)&k,
+                    (void*)&v,
+                    (void*)&o,
+                    (void*)&num_heads,
+                    (void*)&q_stride_bz,
+                    (void*)&q_stride_h,
+                    (void*)&kv_stride_bz,
+                    (void*)&kv_stride_n,
+                    (void*)&o_stride_bz,
+                    (void*)&o_stride_h,
+                    (void*)&Start,
+                    (void*)&Length,
+                    (void*)&sm_scale};
+
+    FLASHINFER_CUDA_CALL(cudaLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
+
   });
   return cudaSuccess;
 }

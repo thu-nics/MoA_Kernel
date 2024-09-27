@@ -208,6 +208,25 @@ def single_decode_with_kv_cache(
         out *= v_scale
     return out
 
+def moa_decode(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    head_start_index: torch.Tensor,
+    head_valid_index: torch.Tensor,
+    sm_scale=None
+):
+    if sm_scale is None:
+        head_dim = q.shape[-1]
+        sm_scale = 1.0 / math.sqrt(head_dim)
+
+    assert head_start_index.dtype == torch.long
+    assert head_valid_index.dtype == torch.long
+
+    out = _decode.moa_decode(
+        q, k, v, head_start_index, head_valid_index, sm_scale
+    )
+    return out
 
 class BatchDecodeWithPagedKVCacheWrapper:
     r"""Wrapper class for decode attention with paged kv-cache (first proposed in

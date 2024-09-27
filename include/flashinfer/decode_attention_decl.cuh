@@ -34,6 +34,18 @@ cudaError_t SingleDecodeWithKVCacheDispatched(
     uint32_t num_kv_heads, uint32_t seq_len, QKVLayout kv_layout, int32_t window_left,
     float logits_soft_cap, float sm_scale, float rope_scale, float rope_theta, cudaStream_t stream);
 
+template <uint32_t HEAD_DIM,
+          typename DTypeQ, typename DTypeKV, typename DTypeOut>
+cudaError_t SingleDecodeWithKVCacheDispatchedMoA(DTypeQ* q, DTypeKV* k, DTypeKV* v, DTypeOut* o,
+                                              uint32_t batch_size,
+                                              uint32_t num_heads,
+                                              uint32_t q_stride_bz, uint32_t q_stride_h,
+                                              uint32_t kv_stride_bz, uint32_t kv_stride_n,
+                                              uint32_t o_stride_bz, uint32_t o_stride_h,
+                                              long* Start, long* Length,
+                                              float sm_scale,
+                                              cudaStream_t stream);
+
 template <uint32_t HEAD_DIM, PageStorage page_storage, LogitsPostHook LOGITS_POST_HOOK,
           PosEncodingMode POS_ENCODING_MODE, typename DTypeQ, typename DTypeKV, typename DTypeOut,
           typename IdType>

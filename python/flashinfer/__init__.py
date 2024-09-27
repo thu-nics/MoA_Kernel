@@ -25,6 +25,7 @@ from .decode import (
     BatchDecodeWithPagedKVCacheWrapper,
     CUDAGraphBatchDecodeWithPagedKVCacheWrapper,
     single_decode_with_kv_cache,
+    moa_decode,
 )
 # from .activation import gelu_tanh_and_mul, silu_and_mul
 # from .group_gemm import SegmentGEMMWrapper

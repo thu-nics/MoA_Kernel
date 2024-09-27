@@ -26,6 +26,10 @@ torch::Tensor single_decode_with_kv_cache(torch::Tensor q, torch::Tensor k, torc
                                           float logits_soft_cap, float sm_scale, float rope_scale,
                                           float rope_theta);
 
+torch::Tensor moa_decode(torch::Tensor q, torch::Tensor k, torch::Tensor v,
+                          torch::Tensor Start, torch::Tensor Length,
+                                          float sm_scale);
+
 class BatchDecodeWithPagedKVCachePyTorchWrapper {
  public:
   void BeginForward(torch::Tensor float_workspace_buffer, torch::Tensor int_workspace_buffer,

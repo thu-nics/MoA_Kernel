@@ -17,6 +17,7 @@
 
 #include "flashinfer_ops_decode.h"
 #include "pytorch_extension_utils.h"
+#include <c10/cuda/CUDAGuard.h>
 
 using namespace flashinfer;
 
@@ -106,6 +107,72 @@ torch::Tensor single_decode_with_kv_cache(torch::Tensor q, torch::Tensor k, torc
       });
     });
   }
+
+  return o;
+}
+
+torch::Tensor moa_decode(torch::Tensor q, torch::Tensor k, torch::Tensor v,
+                          torch::Tensor Start, torch::Tensor Length,
+                                          float sm_scale) {
+  CHECK_INPUT(q);
+  CHECK_INPUT(k);
+  CHECK_INPUT(v);
+  CHECK_INPUT(Start);
+  CHECK_INPUT(Length);
+  auto device = q.device();
+  CHECK_EQ(k.device(), device);
+  CHECK_EQ(v.device(), device);
+  CHECK_DIM(4, q); // [batch_size, 1, num_heads, head_dim]
+  CHECK_DIM(3, k); // [batch_size, ..., head_dim]
+  CHECK_DIM(3, v); // [batch_size, ..., head_dim]
+  CHECK_DIM(2, Start);
+  CHECK_DIM(2, Length);
+  CHECK_SHAPE(k, v);
+  CHECK_EQ(q.size(3), k.size(2));
+  CHECK_EQ(v.scalar_type(), k.scalar_type());
+
+  uint32_t batch_size = q.size(0);
+  uint32_t num_heads = q.size(2);
+  uint32_t head_dim = q.size(3);
+
+  CHECK_EQ(batch_size, k.size(0));
+  CHECK_EQ(batch_size, v.size(0));
+  CHECK_EQ(batch_size, Start.size(0));
+  CHECK_EQ(batch_size, Length.size(0));
+  CHECK_EQ(num_heads, Start.size(1));
+  CHECK_EQ(num_heads, Length.size(1));
+
+  uint32_t q_stride_bz = q.stride(0);
+  uint32_t q_stride_h = q.stride(2);
+  uint32_t kv_stride_bz = k.stride(0);
+  uint32_t kv_stride_n = k.stride(1);
+
+  const at::cuda::OptionalCUDAGuard device_guard(device);
+  cudaStream_t torch_current_stream = nullptr;
+
+  auto o = torch::empty_like(q);
+
+  uint32_t o_stride_bz = o.stride(0);
+  uint32_t o_stride_h = o.stride(2);
+
+  auto q_scalar_type = q.scalar_type();
+
+  DISPATCH_PYTORCH_DTYPE_TO_CTYPE(q_scalar_type, qkv_type, [&] {
+    return DISPATCH_head_dim(head_dim, HEAD_DIM, [&] {
+              cudaError_t status = SingleDecodeWithKVCacheDispatchedMoA<HEAD_DIM>(
+                  static_cast<qkv_type*>(q.data_ptr()), static_cast<qkv_type*>(k.data_ptr()),
+                  static_cast<qkv_type*>(v.data_ptr()), static_cast<qkv_type*>(o.data_ptr()),
+                  batch_size, num_heads, q_stride_bz, q_stride_h, kv_stride_bz, kv_stride_n,
+                  o_stride_bz, o_stride_h, static_cast<long*>(Start.data_ptr()), static_cast<long*>(Length.data_ptr()),
+                  sm_scale, torch_current_stream);
+
+              TORCH_CHECK(status == cudaSuccess,
+                          "SingleDecodeWithKVCache kernel launch failed, error: " +
+                              std::string(cudaGetErrorString(status)));
+              return true;
+    });
+  });
+
 
   return o;
 }

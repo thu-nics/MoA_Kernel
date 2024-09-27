@@ -20,6 +20,8 @@
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("single_decode_with_kv_cache", &single_decode_with_kv_cache,
         "Single-request decode with KV-Cache operator");
+  m.def("moa_decode", &moa_decode,
+        "moa decode");
   py::class_<BatchDecodeWithPagedKVCachePyTorchWrapper>(m,
                                                         "BatchDecodeWithPagedKVCachePyTorchWrapper")
       .def(py::init<unsigned int, bool, unsigned int>())

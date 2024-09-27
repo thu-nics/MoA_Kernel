@@ -28,7 +28,7 @@ import argparse
 import torch
 import torch.utils.cpp_extension as torch_cpp_ext
 
-import generate_single_decode_inst, generate_single_prefill_inst, generate_batch_paged_decode_inst, generate_batch_paged_prefill_inst, generate_batch_ragged_prefill_inst, generate_dispatch_inc, generate_moa_prefill_inst
+import generate_single_decode_inst, generate_single_prefill_inst, generate_batch_paged_decode_inst, generate_batch_paged_prefill_inst, generate_batch_ragged_prefill_inst, generate_dispatch_inc, generate_moa_prefill_inst, generate_moa_decode_inst
 
 root = pathlib.Path(__name__).parent
 
@@ -45,6 +45,9 @@ for cuda_arch_flags in torch_cpp_ext._get_cuda_arch_flags():
     elif arch == 75:
         # disable bf16 for sm75
         enable_bf16 = False
+
+# !
+enable_bf16 = False
 
 if enable_bf16:
     torch_cpp_ext.COMMON_NVCC_FLAGS.append("-DFLASHINFER_ENABLE_BF16")
@@ -123,6 +126,26 @@ def get_instantiation_cu() -> Tuple[List[str], List[str]]:
                 head_dim,
                 logits_hook,
                 pos_encoding_mode,
+                dtype_q,
+                dtype_kv,
+                dtype_out,
+            )
+            write_if_different(root / prefix / fname, content)
+
+    # moa decode files
+    for (
+        head_dim,
+    ) in itertools.product(
+        head_dims,
+    ):
+        for dtype_q, dtype_kv in list(zip(decode_dtypes, decode_dtypes)) + list(
+            itertools.product(fp16_dtypes, fp8_dtypes)
+        ):
+            dtype_out = dtype_q
+            fname = f"moa_decode_head_{head_dim}_dtypeq_{dtype_q}_dtypekv_{dtype_kv}_dtypeout_{dtype_out}.cu"
+            files_decode.append(prefix + "/" + fname)
+            content = generate_moa_decode_inst.get_cu_file_str(
+                head_dim,
                 dtype_q,
                 dtype_kv,
                 dtype_out,
