@@ -24,4 +24,4 @@ Our kernel is build upon [FlashInfer](https://github.com/flashinfer-ai/flashinfe
 # TODO
 - [x] support batch size > 1
 - [x] support multi-GPU inference
-- [] support GQA
+- [ ] support GQA
