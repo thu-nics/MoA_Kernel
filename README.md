@@ -1,40 +1,27 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/flashinfer-ai/web-data/blob/main/logo/FlashInfer-black-background.png?raw=true">
-    <img alt="FlashInfer" src="https://github.com/flashinfer-ai/web-data/blob/main/logo/FlashInfer-white-background.png?raw=true" width=55%>
-  </picture>
-</p>
-<h1 align="center">
-Kernel Library for LLM Serving
-</h1>
+# MoA Kernel
 
-## Getting Started
+This is the CUDA kernel implementation for `MoA: Mixture of Sparse Attention for Automatic Large Language Model Compression`, or [MoA](https://github.com/thu-nics/MoA).
 
-Using our PyTorch API is the easiest way to get started:
+# Installation
 
-### Installation
-
-Tested on **CUDA 12.4** and **torch 2.4**.
-
-Build from source for moa kernel:
+> We test our kernel with `CUDA 12.4` and `PyTorch 2.4`. Install the required environments for MoA before installing the kernel.
 
 ```bash
-git checkout moa_kernel
-cd flashinfer/python
-FLASHINFER_LOGITS_POST_HOOKS=0 FLASHINFER_HEAD_DIMS=128 FLASHINFER_POS_ENCODING_MODES=0 python setup.py install
+cd python
+FLASHINFER_LOGITS_POST_HOOKS=0 FLASHINFER_HEAD_DIMS=64,128 FLASHINFER_POS_ENCODING_MODES=0 python setup.py install
 ```
 
-### Trying it out
+# Quick Test
 
 ```python
 python accuracy_test.py
 ```
 
-### TODO
+# Acknowledgement
+
+Our kernel is build upon [FlashInfer](https://github.com/flashinfer-ai/flashinfer) project.
+
+# TODO
 - [x] support batch size > 1
-- [] acceleration of prefill kernel
+- [x] support multi-GPU inference
 - [] support GQA
-
-## Acknowledgement
-
-FlashInfer is inspired by [FlashAttention 1&2](https://github.com/dao-AILab/flash-attention/), [vLLM](https://github.com/vllm-project/vllm), [stream-K](https://arxiv.org/abs/2301.03598) and [cutlass](https://github.com/nvidia/cutlass) projects.
